@@ -4,9 +4,8 @@ google-auth-oauthlib==1.1.0
 yt-dlp==2023.11.16
 pytube==15.0.0
 
-# AI and metadata
-openai==1.6.1
-transformers==4.36.2
+# AI and metadata (using Gemini instead of OpenAI)
+google-generativeai==0.3.2
 pillow==10.1.0
 
 # Database and file handling
