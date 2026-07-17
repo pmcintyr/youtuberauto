@@ -2,22 +2,30 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Load environment variables
+# Load environment variables (from .env file for local development)
 load_dotenv()
 
 class Config:
-    # YouTube API Configuration
+    # YouTube API Configuration - reads from environment variables
     YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
     YOUTUBE_CLIENT_ID = os.getenv('YOUTUBE_CLIENT_ID')
     YOUTUBE_CLIENT_SECRET = os.getenv('YOUTUBE_CLIENT_SECRET')
     YOUTUBE_REFRESH_TOKEN = os.getenv('YOUTUBE_REFRESH_TOKEN')
     
-    # Target channel (Ishowspeed's channel ID)
-    TARGET_CHANNEL_ID = os.getenv('TARGET_CHANNEL_ID', 'UCWsPfpqE1AqF5_6JgI7rPXg')
+    # Target channel
+    TARGET_CHANNEL_ID = os.getenv('TARGET_CHANNEL_ID', 'UCWsDFcIhY2DBi3GB5uykGXA')
     
-    # Gemini API Configuration (FREE!)
+    # Gemini Configuration
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')  # Use this stable model
+    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+    
+    # Upload settings
+    UPLOAD_PRIVACY = os.getenv('UPLOAD_PRIVACY', 'public')
+    UPLOAD_CATEGORY = os.getenv('UPLOAD_CATEGORY', '22')
+    
+    # Processing settings
+    VIDEO_DURATION_LIMIT = int(os.getenv('VIDEO_DURATION_LIMIT', '60'))
+    MAX_VIDEOS_TO_PROCESS = int(os.getenv('MAX_VIDEOS_TO_PROCESS', '1'))
     
     # Paths
     BASE_DIR = Path(__file__).parent.parent
@@ -25,14 +33,6 @@ class Config:
     DOWNLOADS_DIR = BASE_DIR / 'downloads'
     OUTPUTS_DIR = BASE_DIR / 'outputs'
     LOGS_DIR = BASE_DIR / 'logs'
-    
-    # Processing settings
-    MAX_VIDEOS_TO_PROCESS = 1  # Only process the most recent short
-    VIDEO_DURATION_LIMIT = 60  # Only process videos under 60 seconds (shorts)
-    
-    # Upload settings
-    UPLOAD_CATEGORY = '22'  # People & Blogs
-    UPLOAD_PRIVACY = 'public'  # or 'unlisted' or 'private'
     
     @classmethod
     def ensure_directories(cls):
@@ -48,7 +48,7 @@ class Config:
             'YOUTUBE_CLIENT_ID', 
             'YOUTUBE_CLIENT_SECRET',
             'YOUTUBE_REFRESH_TOKEN',
-            'GEMINI_API_KEY'  # Changed from OPENAI_API_KEY
+            'GEMINI_API_KEY'
         ]
         
         missing = []
