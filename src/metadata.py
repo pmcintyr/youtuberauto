@@ -1,42 +1,80 @@
-import google.genai as genai
-from typing import Dict, List, Optional
-from datetime import datetime, timedelta
-import time
-import hashlib
 import json
+import hashlib
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict, List, Optional
 from src.logger import log
 from src.config import Config
 
 class MetadataGenerator:
     def __init__(self):
-        # Initialize the new Gemini client
-        self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
-        self.model = "gemini-flash-latest"  # Use stable model
+        self.model = "gemini-flash-latest"  # Your model
         self.cache_dir = Config.DATA_DIR / 'metadata_cache'
         self.cache_dir.mkdir(exist_ok=True)
-        self.last_request_time = 0
-        self.min_request_interval = 2  # Minimum seconds between requests
         
-    def _get_cache_key(self, video_title: str, video_description: str) -> str:
-        """Generate a cache key from video metadata"""
-        content = f"{video_title}|{video_description[:100]}"
-        return hashlib.md5(content.encode()).hexdigest()
+        # Track quota usage
+        self.quota_file = self.cache_dir / 'quota_usage.json'
+        self._load_quota_data()
+    
+    def _load_quota_data(self):
+        """Load quota usage data"""
+        if self.quota_file.exists():
+            try:
+                with open(self.quota_file, 'r') as f:
+                    self.quota_data = json.load(f)
+                return
+            except:
+                pass
+        self.quota_data = {
+            'requests_today': 0,
+            'last_reset': datetime.now().isoformat()
+        }
+    
+    def _save_quota_data(self):
+        """Save quota usage data"""
+        try:
+            with open(self.quota_file, 'w') as f:
+                json.dump(self.quota_data, f)
+        except:
+            pass
+    
+    def _check_quota(self) -> bool:
+        """Check if we have quota available (free tier: 20/day)"""
+        # Reset if new day
+        last_reset = datetime.fromisoformat(self.quota_data['last_reset'])
+        if datetime.now().date() > last_reset.date():
+            self.quota_data['requests_today'] = 0
+            self.quota_data['last_reset'] = datetime.now().isoformat()
+            self._save_quota_data()
+        
+        # Check if we've hit the limit
+        if self.quota_data['requests_today'] >= 18:  # Leave 2 for safety
+            log.warning("⚠️ Gemini quota almost exhausted, using cached/fallback metadata")
+            return False
+        
+        return True
+    
+    def _increment_quota(self):
+        """Increment quota usage counter"""
+        self.quota_data['requests_today'] += 1
+        self._save_quota_data()
+    
+    def _get_cache_key(self, video_title: str) -> str:
+        """Generate a cache key from video title"""
+        return hashlib.md5(video_title.encode()).hexdigest()
     
     def _get_cached_metadata(self, cache_key: str) -> Optional[Dict]:
-        """Get cached metadata if it exists and is fresh"""
+        """Get cached metadata if it exists"""
         cache_file = self.cache_dir / f"{cache_key}.json"
         if cache_file.exists():
             try:
                 with open(cache_file, 'r') as f:
                     data = json.load(f)
-                # Check if cache is less than 30 days old
-                cached_date = datetime.fromisoformat(data.get('generated_at', '2000-01-01'))
-                if datetime.now() - cached_date < timedelta(days=30):
-                    log.info("✅ Using cached metadata")
-                    return data
-            except Exception as e:
-                log.warning(f"Cache read error: {e}")
+                log.info("✅ Using cached metadata")
+                return data
+            except:
+                pass
         return None
     
     def _cache_metadata(self, cache_key: str, metadata: Dict):
@@ -45,118 +83,97 @@ class MetadataGenerator:
             cache_file = self.cache_dir / f"{cache_key}.json"
             with open(cache_file, 'w') as f:
                 json.dump(metadata, f, indent=2)
-            log.info("✅ Metadata cached")
-        except Exception as e:
-            log.warning(f"Cache write error: {e}")
-    
-    def _wait_for_rate_limit(self):
-        """Implement rate limiting to avoid quota issues"""
-        current_time = time.time()
-        time_since_last = current_time - self.last_request_time
-        if time_since_last < self.min_request_interval:
-            wait_time = self.min_request_interval - time_since_last
-            log.info(f"Rate limiting: waiting {wait_time:.1f}s")
-            time.sleep(wait_time)
-        self.last_request_time = time.time()
+        except:
+            pass
     
     def generate_metadata(self, video_title: str, video_description: str) -> Dict:
-        """Generate enhanced metadata with caching and rate limiting"""
+        """Generate metadata with caching and quota management"""
+        cache_key = self._get_cache_key(video_title)
+        
         # Check cache first
-        cache_key = self._get_cache_key(video_title, video_description)
         cached = self._get_cached_metadata(cache_key)
         if cached:
             return cached
         
+        # Check if we have quota
+        if not self._check_quota():
+            return self._generate_fallback_metadata(video_title, video_description)
+        
         try:
-            # Rate limit
-            self._wait_for_rate_limit()
+            # Try to generate with Gemini
+            import google.genai as genai
+            
+            client = genai.Client(api_key=Config.GEMINI_API_KEY)
             
             # Generate title
-            title_prompt = f"""Create a viral, engaging title for this YouTube Short. Make it clickable. Original: "{video_title}"
-Rules:
-- MUST be under 100 characters
-- Use emojis (max 2)
-- Make it exciting and curiosity-driven
-- Include a call to action
-- Don't use ALL CAPS
-- Make it unique
-
-Return ONLY the title, nothing else."""
-            
-            title_response = self.client.models.generate_content(
+            title_response = client.models.generate_content(
                 model=self.model,
-                contents=title_prompt
+                contents=f"Create a viral YouTube Short title. Original: '{video_title}'. Make it exciting and clickable."
             )
             enhanced_title = title_response.text.strip()[:100]
-            if not enhanced_title:
-                enhanced_title = video_title[:100]
-            
-            # Rate limit
-            self._wait_for_rate_limit()
             
             # Generate description
-            desc_prompt = f"""Create an engaging description with optimized hashtags for this YouTube Short.
-Original: {video_description}
-Rules:
-- Start with the most interesting hook
-- Include 3-5 relevant hashtags
-- Keep under 500 characters
-- Add a call to action
-- Use emojis (max 3)
-
-Return ONLY the description."""
-            
-            desc_response = self.client.models.generate_content(
+            desc_response = client.models.generate_content(
                 model=self.model,
-                contents=desc_prompt
+                contents=f"Create a short description for this YouTube Short with hashtags. Original: '{video_description}'"
             )
             enhanced_description = desc_response.text.strip()[:5000]
-            if not enhanced_description:
-                enhanced_description = video_description[:5000] if video_description else "Check out this awesome short! 🔥"
-            
-            # Rate limit
-            self._wait_for_rate_limit()
             
             # Generate tags
-            tags_prompt = f"""Generate 10-15 relevant tags for this YouTube Short.
-Title: {video_title}
-Rules:
-- Include main keywords
-- Mix of broad and specific tags
-- Include trending tags
-- Return as comma-separated list"""
-            
-            tags_response = self.client.models.generate_content(
+            tags_response = client.models.generate_content(
                 model=self.model,
-                contents=tags_prompt
+                contents=f"Generate 10 relevant tags for this YouTube Short. Title: '{video_title}'"
             )
             tags = [tag.strip() for tag in tags_response.text.split(',') if tag.strip()][:500]
+            
             if not tags:
                 tags = ['shorts', 'youtube', 'viral', 'trending']
             
+            # Increment quota
+            self._increment_quota()
+            
             metadata = {
-                'enhanced_title': enhanced_title,
-                'enhanced_description': enhanced_description,
+                'enhanced_title': enhanced_title or video_title[:100],
+                'enhanced_description': enhanced_description or video_description[:5000],
                 'tags': tags,
                 'generated_at': datetime.now().isoformat(),
                 'model_used': self.model
             }
             
-            # Cache the result
             self._cache_metadata(cache_key, metadata)
-            
             return metadata
             
         except Exception as e:
-            log.error(f"Error generating metadata with Gemini: {e}")
-            # Return fallback metadata
-            fallback = {
-                'enhanced_title': video_title[:100],
-                'enhanced_description': video_description[:5000] if video_description else "Check out this awesome short! 🔥",
-                'tags': ['shorts', 'youtube', 'viral', 'trending'],
-                'generated_at': datetime.now().isoformat(),
-                'model_used': 'fallback'
-            }
-            # Cache the fallback to avoid repeated failures
-            self._cache_metadata(cache_key, fallback)
-            return fallback
+            log.warning(f"Gemini generation failed: {e}")
+            return self._generate_fallback_metadata(video_title, video_description)
+    
+    def _generate_fallback_metadata(self, video_title: str, video_description: str) -> Dict:
+        """Generate metadata without Gemini"""
+        # Simple title enhancement
+        title = video_title[:100]
+        if "|" in title:
+            title = title.split("|")[0].strip()
+        if not title:
+            title = "🔥 Check out this awesome short!"
+        
+        # Simple description
+        desc = video_description[:5000] if video_description else "🔥 Check out this awesome short! Like, comment, and subscribe for more! #shorts #youtube #viral"
+        
+        # Simple tags
+        tags = ['shorts', 'youtube', 'viral', 'trending', 'video']
+        if "world cup" in video_title.lower():
+            tags.extend(['worldcup', 'football', 'soccer'])
+        if "speed" in video_title.lower() or "ishowspeed" in video_title.lower():
+            tags.extend(['ishowspeed', 'speed'])
+        
+        metadata = {
+            'enhanced_title': title,
+            'enhanced_description': desc,
+            'tags': list(set(tags))[:500],
+            'generated_at': datetime.now().isoformat(),
+            'model_used': 'fallback'
+        }
+        
+        cache_key = self._get_cache_key(video_title)
+        self._cache_metadata(cache_key, metadata)
+        return metadata
