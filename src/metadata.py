@@ -12,7 +12,7 @@ class MetadataGenerator:
     def __init__(self):
         # Initialize the new Gemini client
         self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
-        self.model = "gemini-1.5-flash"  # Use stable model
+        self.model = "gemini-flash-latest"  # Use stable model
         self.cache_dir = Config.DATA_DIR / 'metadata_cache'
         self.cache_dir.mkdir(exist_ok=True)
         self.last_request_time = 0
