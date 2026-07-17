@@ -19,14 +19,10 @@ class YouTubeClient:
         self.client_secret = Config.YOUTUBE_CLIENT_SECRET
         self.refresh_token = Config.YOUTUBE_REFRESH_TOKEN
         
-        # Public API client (for searching and getting metadata)
         self.public_client = build('youtube', 'v3', developerKey=self.api_key)
-        
-        # Authenticated client (for uploading)
         self.auth_client = self._get_authenticated_client()
     
     def _get_authenticated_client(self):
-        """Get authenticated YouTube client for uploads"""
         try:
             credentials = Credentials(
                 token=None,
@@ -35,17 +31,14 @@ class YouTubeClient:
                 client_secret=self.client_secret,
                 token_uri='https://oauth2.googleapis.com/token'
             )
-            
             if credentials.expired:
                 credentials.refresh(Request())
-            
             return build('youtube', 'v3', credentials=credentials)
         except Exception as e:
             log.error(f"Failed to get authenticated client: {e}")
             return None
     
     def get_channel_videos(self, channel_id: str, max_results: int = 5) -> List[Dict]:
-        """Get recent videos from a channel"""
         try:
             request = self.public_client.search().list(
                 part='snippet',
@@ -74,7 +67,6 @@ class YouTubeClient:
                         'like_count': video_details.get('likeCount', 0),
                         'comment_count': video_details.get('commentCount', 0)
                     })
-            
             return videos
         except HttpError as e:
             log.error(f"YouTube API error: {e}")
@@ -84,17 +76,14 @@ class YouTubeClient:
             return []
     
     def get_video_details(self, video_id: str) -> Dict:
-        """Get detailed information about a video"""
         try:
             request = self.public_client.videos().list(
                 part='snippet,contentDetails,statistics',
                 id=video_id
             )
             response = request.execute()
-            
             if not response.get('items'):
                 return {}
-            
             item = response['items'][0]
             return {
                 'duration': item['contentDetails']['duration'],
@@ -109,22 +98,65 @@ class YouTubeClient:
             return {}
     
     def is_short(self, video_duration: str) -> bool:
-        """Check if a video is a short based on duration"""
         pattern = r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?'
         match = re.match(pattern, video_duration)
-        
         if not match:
             return False
-        
         hours = int(match.group(1) or 0)
         minutes = int(match.group(2) or 0)
         seconds = int(match.group(3) or 0)
-        
         total_seconds = hours * 3600 + minutes * 60 + seconds
         return total_seconds <= Config.VIDEO_DURATION_LIMIT
     
     def download_video(self, video_id: str, output_path: str) -> bool:
-        """Download a video using direct URL with yt-dlp"""
+        """
+        Download video using pytube (with cookies if available) first,
+        then fallback to yt-dlp.
+        """
+        # First, try pytube with cookies
+        if self._download_with_pytube(video_id, output_path):
+            return True
+        
+        # Fallback to yt-dlp
+        log.info("Pytube failed, trying yt-dlp...")
+        return self._download_with_ytdlp(video_id, output_path)
+    
+    def _download_with_pytube(self, video_id: str, output_path: str) -> bool:
+        """Use pytube to download the video, optionally with cookies."""
+        try:
+            from pytube import YouTube
+            
+            url = f'https://www.youtube.com/watch?v={video_id}'
+            # Check for cookies file
+            cookies_file = os.getenv('YOUTUBE_COOKIES_FILE')
+            yt = YouTube(url, cookies=cookies_file) if cookies_file and os.path.exists(cookies_file) else YouTube(url)
+            
+            # Get highest resolution stream
+            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+            if not stream:
+                stream = yt.streams.get_highest_resolution()
+            if not stream:
+                log.error("No streams available for this video via pytube")
+                return False
+            
+            # Download
+            output_dir = os.path.dirname(output_path)
+            os.makedirs(output_dir, exist_ok=True)
+            stream.download(output_path=output_dir, filename=os.path.basename(output_path))
+            
+            if os.path.exists(output_path):
+                log.info(f"✅ Downloaded video {video_id} to {output_path} using pytube")
+                return True
+            else:
+                log.error("Download completed but file not found")
+                return False
+                
+        except Exception as e:
+            log.warning(f"Pytube download failed: {e}")
+            return False
+    
+    def _download_with_ytdlp(self, video_id: str, output_path: str) -> bool:
+        """Fallback: use yt-dlp with multiple client attempts and cookies."""
         try:
             import yt_dlp
             
@@ -132,92 +164,77 @@ class YouTubeClient:
             output_dir = os.path.dirname(output_path)
             base_name = os.path.splitext(os.path.basename(output_path))[0]
             
-            # Try multiple approaches
-            approaches = [
-                # Approach 1: Standard download
-                lambda: self._download_with_ytdlp(video_id, base_name, output_dir, {}),
-                
-                # Approach 2: With TV client
-                lambda: self._download_with_ytdlp(video_id, base_name, output_dir, 
-                    {'extractor_args': {'youtube': {'player-client': ['tv']}}}),
-                
-                # Approach 3: With android client
-                lambda: self._download_with_ytdlp(video_id, base_name, output_dir,
-                    {'extractor_args': {'youtube': {'player-client': ['android']}}}),
-                
-                # Approach 4: Using yt-dlp without cookies
-                lambda: self._download_with_ytdlp(video_id, base_name, output_dir,
-                    {'extractor_args': {'youtube': {'player-client': ['default']}}}),
+            # Get cookies file if available
+            cookies_file = os.getenv('YOUTUBE_COOKIES_FILE')
+            has_cookies = cookies_file and os.path.exists(cookies_file)
+            
+            # Different client options to try
+            clients = ['tv_embedded', 'web_creator', 'mweb', 'android', 'ios']
+            user_agents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
             ]
             
-            for i, approach in enumerate(approaches, 1):
-                try:
-                    log.info(f"Download attempt {i}...")
-                    result = approach()
-                    if result:
-                        return result
-                except Exception as e:
-                    log.warning(f"Attempt {i} failed: {str(e)[:100]}")
-                    continue
+            for client in clients:
+                for ua in user_agents:
+                    try:
+                        ydl_opts = {
+                            'outtmpl': os.path.join(output_dir, f'{base_name}.%(ext)s'),
+                            'format': 'best[ext=mp4]/best',
+                            'quiet': True,
+                            'no_warnings': True,
+                            'ignoreerrors': True,
+                            'no_check_certificate': True,
+                            'prefer_insecure': True,
+                            'merge_output_format': 'mp4',
+                            'user_agent': ua,
+                            'extractor_args': {
+                                'youtube': {
+                                    'player-client': [client],
+                                    'skip': ['dash', 'hls']  # Skip problematic formats
+                                }
+                            }
+                        }
+                        if has_cookies:
+                            ydl_opts['cookiefile'] = cookies_file
+                        
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
+                        
+                        # Check for downloaded file
+                        downloaded_files = glob.glob(os.path.join(output_dir, f'{base_name}.*'))
+                        if downloaded_files:
+                            downloaded_file = downloaded_files[0]
+                            if downloaded_file != output_path:
+                                os.rename(downloaded_file, output_path)
+                            log.info(f"✅ Downloaded video {video_id} to {output_path} using yt-dlp (client={client})")
+                            return True
+                    except Exception as e:
+                        log.warning(f"yt-dlp attempt with client {client} failed: {str(e)[:100]}")
+                        continue
             
-            log.error(f"All download attempts failed for {video_id}")
+            log.error("All yt-dlp attempts failed")
             return False
             
         except ImportError:
             log.error("yt-dlp not installed")
             return False
         except Exception as e:
-            log.error(f"Error downloading video: {e}")
-            return False
-    
-    def _download_with_ytdlp(self, video_id: str, base_name: str, output_dir: str, extra_opts: Dict) -> bool:
-        """Helper method for yt-dlp download"""
-        try:
-            import yt_dlp
-            
-            ydl_opts = {
-                'outtmpl': os.path.join(output_dir, f'{base_name}.%(ext)s'),
-                'format': 'best[ext=mp4]/best',
-                'quiet': True,
-                'no_warnings': True,
-                'ignoreerrors': True,
-                'no_check_certificate': True,
-                'prefer_insecure': True,
-                'merge_output_format': 'mp4',
-                **extra_opts
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
-            
-            # Check for downloaded files
-            downloaded_files = glob.glob(os.path.join(output_dir, f'{base_name}.*'))
-            if downloaded_files:
-                downloaded_file = downloaded_files[0]
-                if downloaded_file != os.path.join(output_dir, f'{base_name}.mp4'):
-                    os.rename(downloaded_file, os.path.join(output_dir, f'{base_name}.mp4'))
-                log.info(f"✅ Downloaded to: {downloaded_file}")
-                return True
-            return False
-            
-        except Exception as e:
-            log.error(f"yt-dlp download failed: {e}")
+            log.error(f"Error with yt-dlp: {e}")
             return False
     
     def upload_video(self, video_path: str, title: str, description: str, 
                      tags: List[str], thumbnail_path: Optional[str] = None) -> Optional[str]:
-        """Upload a video to YouTube"""
         if not self.auth_client:
             log.error("No authenticated client available")
             return None
         
         if not os.path.exists(video_path):
-            # Try to find the file with different extensions
             base_name = os.path.splitext(os.path.basename(video_path))[0]
             for ext in ['.mp4', '.webm', '.mkv']:
-                found_files = glob.glob(os.path.join('downloads', f'{base_name}{ext}'))
-                if found_files:
-                    video_path = found_files[0]
+                found = glob.glob(os.path.join('downloads', f'{base_name}{ext}'))
+                if found:
+                    video_path = found[0]
                     log.info(f"Found video file: {video_path}")
                     break
             else:
@@ -246,12 +263,7 @@ class YouTubeClient:
                 else:
                     mime_type = 'video/*'
             
-            media = MediaFileUpload(
-                video_path,
-                mimetype=mime_type,
-                resumable=True
-            )
-            
+            media = MediaFileUpload(video_path, mimetype=mime_type, resumable=True)
             request = self.auth_client.videos().insert(
                 part=','.join(body.keys()),
                 body=body,
@@ -277,13 +289,9 @@ class YouTubeClient:
             return None
     
     def _upload_thumbnail(self, video_id: str, thumbnail_path: str):
-        """Upload thumbnail for a video"""
         try:
             media = MediaFileUpload(thumbnail_path, mimetype='image/png')
-            self.auth_client.thumbnails().set(
-                videoId=video_id,
-                media_body=media
-            ).execute()
+            self.auth_client.thumbnails().set(videoId=video_id, media_body=media).execute()
             log.info(f"✅ Uploaded thumbnail for video {video_id}")
         except Exception as e:
             log.error(f"Failed to upload thumbnail: {e}")
