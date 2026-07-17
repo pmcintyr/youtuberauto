@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from typing import Dict, List, Optional, Tuple
 from googleapiclient.discovery import build
@@ -125,45 +126,65 @@ class YouTubeClient:
         return total_seconds <= Config.VIDEO_DURATION_LIMIT
     
     def download_video(self, video_id: str, output_path: str) -> bool:
-        """Download a video using yt-dlp"""
+        """Download a video using yt-dlp with robust file finding"""
         try:
             import yt_dlp
-            import os
+            import glob
             
             # Ensure the downloads directory exists
             os.makedirs('downloads', exist_ok=True)
             
-            # Use the exact output path
-            ydl_opts = {
-                'outtmpl': output_path,  # Use the exact path provided
-                'format': 'best[ext=mp4]/best',  # Simplified format
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': False,
-                'ignoreerrors': True,
-                'no_check_certificate': True,
-                'prefer_insecure': True,
-            }
+            # Get the directory and base filename
+            output_dir = os.path.dirname(output_path)
+            base_name = os.path.splitext(os.path.basename(output_path))[0]
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
-                
-                # Check if file exists
-                if os.path.exists(output_path):
-                    log.info(f"Downloaded video {video_id} to {output_path}")
-                    return True
-                else:
-                    # Try to find the file with a different extension
-                    import glob
-                    files = glob.glob(f"downloads/{video_id}.*")
-                    if files:
+            # Try downloading with different format options
+            formats_to_try = [
+                'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'best[ext=mp4]',
+                'best',
+                'worst'  # Last resort
+            ]
+            
+            for format_str in formats_to_try:
+                try:
+                    ydl_opts = {
+                        'outtmpl': os.path.join(output_dir, f'{base_name}.%(ext)s'),
+                        'format': format_str,
+                        'quiet': True,
+                        'no_warnings': True,
+                        'extract_flat': False,
+                        'ignoreerrors': True,
+                        'no_check_certificate': True,
+                        'prefer_insecure': True,
+                        'merge_output_format': 'mp4',
+                    }
+                    
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
+                    
+                    # Find the downloaded file
+                    downloaded_files = glob.glob(os.path.join(output_dir, f'{base_name}.*'))
+                    
+                    if downloaded_files:
                         # Rename to the expected path
-                        os.rename(files[0], output_path)
-                        log.info(f"Renamed {files[0]} to {output_path}")
+                        downloaded_file = downloaded_files[0]
+                        if downloaded_file != output_path:
+                            os.rename(downloaded_file, output_path)
+                            log.info(f"Renamed {downloaded_file} to {output_path}")
+                        else:
+                            log.info(f"Downloaded video {video_id} to {output_path}")
                         return True
                     else:
-                        log.error(f"Could not find downloaded file for {video_id}")
-                        return False
+                        log.warning(f"No file found for {video_id} with format {format_str}")
+                        continue
+                        
+                except Exception as e:
+                    log.warning(f"Download attempt with format {format_str} failed: {e}")
+                    continue
+            
+            log.error(f"All download attempts failed for {video_id}")
+            return False
             
         except Exception as e:
             log.error(f"Error downloading video: {e}")
@@ -176,12 +197,25 @@ class YouTubeClient:
             log.error("No authenticated client available")
             return None
         
+        # Check if video file exists
+        if not os.path.exists(video_path):
+            log.error(f"Video file not found: {video_path}")
+            # Try to find the file
+            import glob
+            base_name = os.path.splitext(os.path.basename(video_path))[0]
+            found_files = glob.glob(os.path.join('downloads', f'{base_name}.*'))
+            if found_files:
+                video_path = found_files[0]
+                log.info(f"Found video file: {video_path}")
+            else:
+                return None
+        
         try:
             body = {
                 'snippet': {
                     'title': title,
                     'description': description,
-                    'tags': tags[:500],  # YouTube limits to 500 tags
+                    'tags': tags[:500],
                     'categoryId': Config.UPLOAD_CATEGORY
                 },
                 'status': {
@@ -190,7 +224,13 @@ class YouTubeClient:
             }
             
             # Upload video
-            media = self._get_media_upload(video_path)
+            from googleapiclient.http import MediaFileUpload
+            media = MediaFileUpload(
+                video_path,
+                mimetype='video/mp4',
+                resumable=True
+            )
+            
             request = self.auth_client.videos().insert(
                 part=','.join(body.keys()),
                 body=body,
@@ -200,7 +240,7 @@ class YouTubeClient:
             response = request.execute()
             video_id = response.get('id')
             
-            if video_id and thumbnail_path:
+            if video_id and thumbnail_path and os.path.exists(thumbnail_path):
                 # Upload thumbnail
                 self._upload_thumbnail(video_id, thumbnail_path)
             
@@ -215,16 +255,6 @@ class YouTubeClient:
         except Exception as e:
             log.error(f"Unexpected upload error: {e}")
             return None
-    
-    def _get_media_upload(self, video_path: str):
-        """Get media upload object for video"""
-        from googleapiclient.http import MediaFileUpload
-        
-        return MediaFileUpload(
-            video_path,
-            mimetype='video/mp4',
-            resumable=True
-        )
     
     def _upload_thumbnail(self, video_id: str, thumbnail_path: str):
         """Upload thumbnail for a video"""
