@@ -2,37 +2,50 @@ name: YouTube Automation Pipeline
 
 on:
   schedule:
-    - cron: '0 */12 * * *'
-  workflow_dispatch:
+    - cron: '0 9 * * *'          # daily at 09:00 UTC
+  workflow_dispatch:             # manual trigger
 
 jobs:
   process-and-upload:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-      
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install --upgrade yt-dlp
-      
-      - name: Create directories
+          # PO Token provider – needed for bypassing bot detection
+          pip install bgutil-ytdlp-pot-provider
+
+      - name: Create necessary directories
         run: |
-          mkdir -p downloads outputs data data/metadata_cache logs
-      
+          mkdir -p downloads outputs data logs data/metadata_cache
+
+      - name: Decode and save cookies
+        env:
+          COOKIES_BASE64: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          if [ -n "$COOKIES_BASE64" ]; then
+            echo "$COOKIES_BASE64" | base64 -d > cookies.txt
+            echo "✅ Cookies decoded (lines: $(wc -l < cookies.txt))"
+          else
+            echo "⚠️ No cookies found – downloads may fail"
+          fi
+
       - name: Run main pipeline
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
@@ -41,16 +54,31 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
           TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_COOKIES_FILE: cookies.txt   # passed to yt-dlp
         run: |
+          # Debug: show cookies file presence
+          if [ -f cookies.txt ]; then
+            echo "✅ Cookies file found"
+          else
+            echo "⚠️ Cookies file missing"
+          fi
           python src/main.py
-      
-      - name: Upload results
+
+      - name: Upload results as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pipeline-results
+          name: pipeline-results-${{ github.run_id }}
           path: |
             data/
             logs/
             outputs/
           retention-days: 14
+          if-no-files-found: warn
+
+      - name: Clean up (remove cookies for security)
+        if: always()
+        run: |
+          rm -rf downloads/*
+          rm -rf outputs/*
+          rm -f cookies.txt
