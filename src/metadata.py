@@ -1,22 +1,15 @@
-import google.generativeai as genai
-from typing import Dict, List, Tuple
+import google.genai as genai
+from google.genai import types
+from typing import Dict, List
 from datetime import datetime
 from src.logger import log
 from src.config import Config
 
 class MetadataGenerator:
     def __init__(self):
-        # Configure Gemini
-        genai.configure(api_key=Config.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(Config.GEMINI_MODEL)
-        
-        # Set up generation config for consistent outputs
-        self.generation_config = {
-            "temperature": 0.8,
-            "top_p": 0.95,
-            "top_k": 40,
-            "max_output_tokens": 200,
-        }
+        # Initialize the new Gemini client
+        self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
+        self.model = "gemini-2.0-flash-exp"  # Latest free model
     
     def generate_metadata(self, video_title: str, video_description: str) -> Dict:
         """Generate enhanced metadata for the video using Gemini"""
@@ -34,7 +27,10 @@ Rules:
 
 Return ONLY the title, nothing else."""
             
-            title_response = self.model.generate_content(title_prompt)
+            title_response = self.client.models.generate_content(
+                model=self.model,
+                contents=title_prompt
+            )
             enhanced_title = title_response.text.strip()
             
             # Generate a description with hashtags
@@ -52,7 +48,10 @@ Rules:
 
 Return ONLY the description, nothing else."""
             
-            desc_response = self.model.generate_content(desc_prompt)
+            desc_response = self.client.models.generate_content(
+                model=self.model,
+                contents=desc_prompt
+            )
             enhanced_description = desc_response.text.strip()
             
             # Generate tags
@@ -70,7 +69,10 @@ Rules:
 
 Return ONLY the tags as a comma-separated list, nothing else."""
             
-            tags_response = self.model.generate_content(tags_prompt)
+            tags_response = self.client.models.generate_content(
+                model=self.model,
+                contents=tags_prompt
+            )
             tags = [tag.strip() for tag in tags_response.text.split(',') if tag.strip()]
             
             # Ensure we have at least some tags
@@ -78,11 +80,11 @@ Return ONLY the tags as a comma-separated list, nothing else."""
                 tags = ['shorts', 'youtube', 'viral', 'trending']
             
             return {
-                'enhanced_title': enhanced_title[:100],  # YouTube limit
-                'enhanced_description': enhanced_description[:5000],  # YouTube limit
-                'tags': tags[:500],  # YouTube limits to 500 tags
+                'enhanced_title': enhanced_title[:100],
+                'enhanced_description': enhanced_description[:5000],
+                'tags': tags[:500],
                 'generated_at': datetime.now().isoformat(),
-                'model_used': 'gemini-pro'
+                'model_used': 'gemini-2.0-flash-exp'
             }
             
         except Exception as e:
@@ -111,42 +113,17 @@ Rules:
 
 Return each idea on a new line prefixed with a number."""
             
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt
+            )
             ideas = [idea.strip() for idea in response.text.split('\n') if idea.strip() and any(c.isdigit() for c in idea[:2])]
             
             if not ideas:
                 ideas = ["Surprised face reaction thumbnail with bold text overlay"]
             
-            return ideas[:3]  # Limit to 3 ideas
+            return ideas[:3]
             
         except Exception as e:
             log.error(f"Error generating thumbnail ideas: {e}")
             return ["Surprised face reaction thumbnail with text overlay"]
-    
-    def generate_hashtags(self, video_title: str, video_description: str) -> List[str]:
-        """Generate optimized hashtags using Gemini"""
-        try:
-            prompt = f"""Generate 10 highly relevant and trending hashtags for this YouTube Short.
-
-Video title: {video_title}
-Video description: {video_description}
-
-Rules:
-- Start with the most relevant hashtags
-- Include a mix of broad and specific tags
-- Include trending hashtags when relevant
-- Keep each hashtag under 30 characters
-- No spaces in hashtags
-- Include the channel name or personality if relevant
-
-Return ONLY the hashtags as a space-separated list, nothing else."""
-            
-            response = self.model.generate_content(prompt)
-            hashtags = response.text.strip().split()
-            # Clean up hashtags
-            hashtags = [tag if tag.startswith('#') else f'#{tag}' for tag in hashtags]
-            return hashtags[:10]  # Limit to 10 hashtags
-            
-        except Exception as e:
-            log.error(f"Error generating hashtags: {e}")
-            return ['#shorts', '#youtube', '#viral', '#trending', '#video']
