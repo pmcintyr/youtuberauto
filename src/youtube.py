@@ -128,9 +128,11 @@ class YouTubeClient:
         return total_seconds <= Config.VIDEO_DURATION_LIMIT
     
     def download_video(self, video_id: str, output_path: str) -> bool:
-        """Download a video using yt-dlp with tv_embedded client"""
+        """Download a video using yt-dlp with proper cookie handling"""
         try:
             import yt_dlp
+            import os
+            import glob
             
             # Ensure the downloads directory exists
             os.makedirs('downloads', exist_ok=True)
@@ -139,92 +141,73 @@ class YouTubeClient:
             output_dir = os.path.dirname(output_path)
             base_name = os.path.splitext(os.path.basename(output_path))[0]
             
-            # Try with tv_embedded client (works without PO token)
-            try:
-                log.info(f"Attempting download with tv_embedded client...")
-                
-                ydl_opts = {
-                    'outtmpl': os.path.join(output_dir, f'{base_name}.%(ext)s'),
-                    'format': 'bestvideo+bestaudio/best',
-                    'quiet': True,
-                    'no_warnings': True,
-                    'extract_flat': False,
-                    'ignoreerrors': True,
-                    'no_check_certificate': True,
-                    'prefer_insecure': True,
-                    'merge_output_format': 'webm',  # YouTube often outputs webm
-                    'extractor_args': {
-                        'youtube': {
-                            'player-client': ['tv_embedded'],
+            # Check for cookies file
+            cookies_file = os.getenv('YOUTUBE_COOKIES_FILE')
+            cookies_arg = None
+            
+            if cookies_file and os.path.exists(cookies_file):
+                # Read cookies to verify they're not empty
+                with open(cookies_file, 'r') as f:
+                    content = f.read().strip()
+                    if content:
+                        log.info(f"✅ Using cookies from {cookies_file} ({len(content)} chars)")
+                        cookies_arg = cookies_file
+                    else:
+                        log.warning("⚠️ Cookies file is empty!")
+            else:
+                log.warning("⚠️ No cookies file found")
+            
+            # Try different clients with proper cookie handling
+            clients_to_try = ['tv_embedded', 'mweb', 'web_creator', 'default']
+            
+            for client in clients_to_try:
+                try:
+                    log.info(f"Attempting download with client: {client}")
+                    
+                    ydl_opts = {
+                        'outtmpl': os.path.join(output_dir, f'{base_name}.%(ext)s'),
+                        'format': 'bestvideo+bestaudio/best',
+                        'quiet': False,  # Set to False temporarily for debugging
+                        'no_warnings': False,
+                        'extract_flat': False,
+                        'ignoreerrors': True,
+                        'no_check_certificate': True,
+                        'prefer_insecure': True,
+                        'merge_output_format': 'mp4',
+                        'extractor_args': {
+                            'youtube': {
+                                'player-client': [client],
+                            }
                         }
                     }
-                }
-                
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
-                
-                # Check for downloaded files (could be .mp4 or .webm)
-                possible_extensions = ['.mp4', '.webm', '.mkv', '.avi']
-                downloaded_files = []
-                for ext in possible_extensions:
-                    downloaded_files.extend(glob.glob(os.path.join(output_dir, f'{base_name}*{ext}')))
-                
-                if downloaded_files:
-                    downloaded_file = downloaded_files[0]
-                    # If the file doesn't have .mp4 extension, rename it
-                    if not downloaded_file.endswith('.mp4') and not output_path.endswith('.webm'):
-                        # Rename to .webm (YouTube accepts it)
-                        new_path = output_path.replace('.mp4', '.webm')
-                        if downloaded_file != new_path:
-                            os.rename(downloaded_file, new_path)
-                            log.info(f"Renamed {downloaded_file} to {new_path}")
-                        else:
-                            log.info(f"Downloaded video {video_id} to {downloaded_file}")
-                    else:
-                        log.info(f"Downloaded video {video_id} to {downloaded_file}")
-                    return True
-                else:
-                    log.error(f"No downloaded file found for {video_id}")
-                    return False
                     
-            except Exception as e:
-                log.warning(f"Download with tv_embedded failed: {e}")
-                # Fallback to default client
-                log.info("Falling back to default client...")
-                ydl_opts = {
-                    'outtmpl': os.path.join(output_dir, f'{base_name}.%(ext)s'),
-                    'format': 'bestvideo+bestaudio/best',
-                    'quiet': True,
-                    'no_warnings': True,
-                    'extract_flat': False,
-                    'ignoreerrors': True,
-                    'no_check_certificate': True,
-                    'prefer_insecure': True,
-                    'merge_output_format': 'webm',
-                }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
-                
-                # Check for downloaded files
-                downloaded_files = glob.glob(os.path.join(output_dir, f'{base_name}.*'))
-                if downloaded_files:
-                    downloaded_file = downloaded_files[0]
-                    # Rename to expected path if needed
-                    if downloaded_file != output_path:
-                        # If output_path expects .mp4 but file is .webm, update output_path
-                        if output_path.endswith('.mp4') and downloaded_file.endswith('.webm'):
-                            output_path = output_path.replace('.mp4', '.webm')
-                        os.rename(downloaded_file, output_path)
-                        log.info(f"Renamed {downloaded_file} to {output_path}")
-                    log.info(f"Downloaded video {video_id} to {output_path}")
-                    return True
-                
-                log.error(f"All download attempts failed for {video_id}")
-                return False
+                    # Add cookies if available - use the cookiefile option
+                    if cookies_arg:
+                        ydl_opts['cookiefile'] = cookies_arg
+                        log.info(f"Using cookiefile: {cookies_arg}")
+                    
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
+                    
+                    # Check for downloaded files
+                    possible_extensions = ['.mp4', '.webm', '.mkv']
+                    downloaded_files = []
+                    for ext in possible_extensions:
+                        downloaded_files.extend(glob.glob(os.path.join(output_dir, f'{base_name}*{ext}')))
+                    
+                    if downloaded_files:
+                        downloaded_file = downloaded_files[0]
+                        log.info(f"✅ Downloaded to: {downloaded_file}")
+                        return True
+                        
+                except Exception as e:
+                    log.warning(f"Client {client} failed: {str(e)[:100]}...")
+                    continue
             
-        except ImportError as e:
-            log.error(f"yt-dlp not installed: {e}")
-            return False
+            # Fallback to pytube
+            log.info("All yt-dlp attempts failed, trying pytube...")
+            return self.download_video_pytube(video_id, output_path)
+            
         except Exception as e:
             log.error(f"Error downloading video: {e}")
             return False
