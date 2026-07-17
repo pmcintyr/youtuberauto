@@ -15,8 +15,9 @@ class Config:
     # Target channel (Ishowspeed's channel ID)
     TARGET_CHANNEL_ID = os.getenv('TARGET_CHANNEL_ID', 'UCWsPfpqE1AqF5_6JgI7rPXg')
     
-    # OpenAI Configuration
-    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    # Gemini API Configuration (FREE!)
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-pro')  # Free tier model
     
     # Paths
     BASE_DIR = Path(__file__).parent.parent
@@ -47,7 +48,7 @@ class Config:
             'YOUTUBE_CLIENT_ID', 
             'YOUTUBE_CLIENT_SECRET',
             'YOUTUBE_REFRESH_TOKEN',
-            'OPENAI_API_KEY'
+            'GEMINI_API_KEY'  # Changed from OPENAI_API_KEY
         ]
         
         missing = []
