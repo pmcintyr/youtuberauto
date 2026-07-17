@@ -2,8 +2,7 @@ import os
 import re
 import glob
 import mimetypes
-import requests
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
@@ -48,7 +47,6 @@ class YouTubeClient:
                 type='video'
             )
             response = request.execute()
-            
             videos = []
             for item in response.get('items', []):
                 video_id = item['id']['videoId']
@@ -109,66 +107,87 @@ class YouTubeClient:
         return total_seconds <= Config.VIDEO_DURATION_LIMIT
     
     def download_video(self, video_id: str, output_path: str) -> bool:
-        """
-        Download video using pytube (with cookies if available) first,
-        then fallback to yt-dlp.
-        """
-        # First, try pytube with cookies
-        if self._download_with_pytube(video_id, output_path):
+        """Try yt-dlp with PO Token first, fallback to cookies."""
+        if self._download_with_ytdlp_po_token(video_id, output_path):
             return True
-        
-        # Fallback to yt-dlp
-        log.info("Pytube failed, trying yt-dlp...")
+        # Fallback to standard yt-dlp with cookies
+        log.info("PO Token approach failed, trying standard yt-dlp with cookies...")
         return self._download_with_ytdlp(video_id, output_path)
     
-    def _download_with_pytube(self, video_id: str, output_path: str) -> bool:
-        """Use pytube to download the video, optionally with cookies."""
-        try:
-            from pytube import YouTube
-            
-            url = f'https://www.youtube.com/watch?v={video_id}'
-            # Check for cookies file
-            cookies_file = os.getenv('YOUTUBE_COOKIES_FILE')
-            yt = YouTube(url, cookies=cookies_file) if cookies_file and os.path.exists(cookies_file) else YouTube(url)
-            
-            # Get highest resolution stream
-            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
-            if not stream:
-                stream = yt.streams.get_highest_resolution()
-            if not stream:
-                log.error("No streams available for this video via pytube")
-                return False
-            
-            # Download
-            output_dir = os.path.dirname(output_path)
-            os.makedirs(output_dir, exist_ok=True)
-            stream.download(output_path=output_dir, filename=os.path.basename(output_path))
-            
-            if os.path.exists(output_path):
-                log.info(f"✅ Downloaded video {video_id} to {output_path} using pytube")
-                return True
-            else:
-                log.error("Download completed but file not found")
-                return False
-                
-        except Exception as e:
-            log.warning(f"Pytube download failed: {e}")
-            return False
-    
-    def _download_with_ytdlp(self, video_id: str, output_path: str) -> bool:
-        """Fallback: use yt-dlp with multiple client attempts and cookies."""
+    def _download_with_ytdlp_po_token(self, video_id: str, output_path: str) -> bool:
+        """Use PO Token generated from cookies to bypass bot check."""
         try:
             import yt_dlp
-            
             os.makedirs('downloads', exist_ok=True)
             output_dir = os.path.dirname(output_path)
             base_name = os.path.splitext(os.path.basename(output_path))[0]
             
-            # Get cookies file if available
+            cookies_file = os.getenv('YOUTUBE_COOKIES_FILE')
+            po_token = None
+            
+            if cookies_file and os.path.exists(cookies_file):
+                try:
+                    from bgutil_ytdlp_pot_provider import generator
+                    # Generate PO Token using the cookies file
+                    po_token = generator.get_po_token(cookies_file=cookies_file)
+                    log.info("✅ PO Token generated successfully")
+                except ImportError:
+                    log.warning("bgutil-ytdlp-pot-provider not installed, cannot use PO Token")
+                except Exception as e:
+                    log.warning(f"PO Token generation failed: {e}")
+            
+            if not po_token:
+                log.warning("No PO Token available, skipping this method")
+                return False
+            
+            # Build ydl options with PO Token and force IPv4
+            ydl_opts = {
+                'outtmpl': os.path.join(output_dir, f'{base_name}.%(ext)s'),
+                'format': 'best[ext=mp4]/best',
+                'quiet': False,
+                'no_warnings': False,
+                'ignoreerrors': True,
+                'no_check_certificate': True,
+                'prefer_insecure': True,
+                'merge_output_format': 'mp4',
+                'source_address': '0.0.0.0',  # Force IPv4
+                'extractor_args': {
+                    'youtube': {
+                        'player-client': ['tv_embedded'],
+                        'po_token': [po_token],
+                        'skip': ['dash', 'hls']
+                    }
+                }
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
+            
+            # Check for downloaded file
+            downloaded_files = glob.glob(os.path.join(output_dir, f'{base_name}.*'))
+            if downloaded_files:
+                downloaded_file = downloaded_files[0]
+                if downloaded_file != output_path:
+                    os.rename(downloaded_file, output_path)
+                log.info(f"✅ Downloaded with PO Token: {output_path}")
+                return True
+            return False
+            
+        except Exception as e:
+            log.warning(f"PO Token download failed: {e}")
+            return False
+    
+    def _download_with_ytdlp(self, video_id: str, output_path: str) -> bool:
+        """Fallback: standard yt-dlp with cookies and multiple clients."""
+        try:
+            import yt_dlp
+            os.makedirs('downloads', exist_ok=True)
+            output_dir = os.path.dirname(output_path)
+            base_name = os.path.splitext(os.path.basename(output_path))[0]
+            
             cookies_file = os.getenv('YOUTUBE_COOKIES_FILE')
             has_cookies = cookies_file and os.path.exists(cookies_file)
             
-            # Different client options to try
             clients = ['tv_embedded', 'web_creator', 'mweb', 'android', 'ios']
             user_agents = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
@@ -187,11 +206,12 @@ class YouTubeClient:
                             'no_check_certificate': True,
                             'prefer_insecure': True,
                             'merge_output_format': 'mp4',
+                            'source_address': '0.0.0.0',
                             'user_agent': ua,
                             'extractor_args': {
                                 'youtube': {
                                     'player-client': [client],
-                                    'skip': ['dash', 'hls']  # Skip problematic formats
+                                    'skip': ['dash', 'hls']
                                 }
                             }
                         }
@@ -201,26 +221,19 @@ class YouTubeClient:
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                             ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
                         
-                        # Check for downloaded file
                         downloaded_files = glob.glob(os.path.join(output_dir, f'{base_name}.*'))
                         if downloaded_files:
                             downloaded_file = downloaded_files[0]
                             if downloaded_file != output_path:
                                 os.rename(downloaded_file, output_path)
-                            log.info(f"✅ Downloaded video {video_id} to {output_path} using yt-dlp (client={client})")
+                            log.info(f"✅ Downloaded with yt-dlp (client={client})")
                             return True
                     except Exception as e:
-                        log.warning(f"yt-dlp attempt with client {client} failed: {str(e)[:100]}")
+                        log.warning(f"yt-dlp client {client} failed: {str(e)[:100]}")
                         continue
-            
-            log.error("All yt-dlp attempts failed")
-            return False
-            
-        except ImportError:
-            log.error("yt-dlp not installed")
             return False
         except Exception as e:
-            log.error(f"Error with yt-dlp: {e}")
+            log.error(f"yt-dlp error: {e}")
             return False
     
     def upload_video(self, video_path: str, title: str, description: str, 
@@ -235,10 +248,9 @@ class YouTubeClient:
                 found = glob.glob(os.path.join('downloads', f'{base_name}{ext}'))
                 if found:
                     video_path = found[0]
-                    log.info(f"Found video file: {video_path}")
                     break
             else:
-                log.error(f"Could not find video file for {base_name}")
+                log.error(f"Video file not found: {video_path}")
                 return None
         
         try:
@@ -249,40 +261,24 @@ class YouTubeClient:
                     'tags': tags[:500],
                     'categoryId': Config.UPLOAD_CATEGORY
                 },
-                'status': {
-                    'privacyStatus': Config.UPLOAD_PRIVACY
-                }
+                'status': {'privacyStatus': Config.UPLOAD_PRIVACY}
             }
             
-            mime_type, _ = mimetypes.guess_type(video_path)
-            if not mime_type:
-                if video_path.endswith('.webm'):
-                    mime_type = 'video/webm'
-                elif video_path.endswith('.mp4'):
-                    mime_type = 'video/mp4'
-                else:
-                    mime_type = 'video/*'
-            
+            mime_type = mimetypes.guess_type(video_path)[0] or 'video/mp4'
             media = MediaFileUpload(video_path, mimetype=mime_type, resumable=True)
             request = self.auth_client.videos().insert(
                 part=','.join(body.keys()),
                 body=body,
                 media_body=media
             )
-            
-            log.info(f"Uploading video: {title[:50]}...")
+            log.info(f"Uploading: {title[:50]}...")
             response = request.execute()
             video_id = response.get('id')
-            
             if video_id:
-                log.info(f"✅ Successfully uploaded video: {video_id}")
+                log.info(f"✅ Uploaded video: {video_id}")
                 if thumbnail_path and os.path.exists(thumbnail_path):
                     self._upload_thumbnail(video_id, thumbnail_path)
                 return video_id
-            return None
-            
-        except HttpError as e:
-            log.error(f"YouTube upload error: {e}")
             return None
         except Exception as e:
             log.error(f"Upload error: {e}")
@@ -292,6 +288,6 @@ class YouTubeClient:
         try:
             media = MediaFileUpload(thumbnail_path, mimetype='image/png')
             self.auth_client.thumbnails().set(videoId=video_id, media_body=media).execute()
-            log.info(f"✅ Uploaded thumbnail for video {video_id}")
+            log.info(f"✅ Uploaded thumbnail for {video_id}")
         except Exception as e:
-            log.error(f"Failed to upload thumbnail: {e}")
+            log.error(f"Thumbnail upload failed: {e}")
