@@ -8,7 +8,7 @@ class MetadataGenerator:
     def __init__(self):
         # Initialize the new Gemini client
         self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
-        self.model = "gemini-1.5-flash"  # Stable, free model
+        self.model = "gemini-flash-latest"  # Stable, free model
     
     def generate_metadata(self, video_title: str, video_description: str) -> Dict:
         """Generate enhanced metadata for the video using Gemini"""
