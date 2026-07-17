@@ -4,11 +4,10 @@ google-auth-oauthlib==1.1.0
 yt-dlp==2023.11.16
 pytube==15.0.0
 
-# AI and metadata (using Gemini)
-google-generativeai==0.3.2
-pillow>=10.2.0
+# AI and metadata - NEW Gemini SDK
+google-genai==1.0.0  # New unified SDK
 
-# Database and file handling (removed pandas)
+# Database and file handling
 sqlalchemy==2.0.23
 
 # Utilities
