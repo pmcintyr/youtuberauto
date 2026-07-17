@@ -17,7 +17,7 @@ class Config:
     
     # Gemini API Configuration (FREE!)
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-pro')  # Free tier model
+    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-exp')  # Updated to latest free model
     
     # Paths
     BASE_DIR = Path(__file__).parent.parent
