@@ -4,9 +4,9 @@ google-auth-oauthlib==1.1.0
 yt-dlp==2023.11.16
 pytube==15.0.0
 
-# AI and metadata (using Gemini instead of OpenAI)
+# AI and metadata (using Gemini)
 google-generativeai==0.3.2
-pillow==10.1.0
+pillow>=10.2.0  # Updated for Python 3.13 compatibility
 
 # Database and file handling
 sqlalchemy==2.0.23
@@ -15,7 +15,7 @@ pandas==2.1.4
 # Utilities
 python-dotenv==1.0.0
 requests==2.31.0
-opencv-python==4.8.1.78
+opencv-python-headless==4.8.1.78  # Changed to headless version for better compatibility
 moviepy==1.0.3
 
 # Logging and monitoring
