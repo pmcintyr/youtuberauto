@@ -1,4 +1,4 @@
-import openai
+import google.generativeai as genai
 from typing import Dict, List, Tuple
 from datetime import datetime
 from src.logger import log
@@ -6,10 +6,20 @@ from src.config import Config
 
 class MetadataGenerator:
     def __init__(self):
-        self.openai_client = openai.OpenAI(api_key=Config.OPENAI_API_KEY)
+        # Configure Gemini
+        genai.configure(api_key=Config.GEMINI_API_KEY)
+        self.model = genai.GenerativeModel(Config.GEMINI_MODEL)
+        
+        # Set up generation config for consistent outputs
+        self.generation_config = {
+            "temperature": 0.8,
+            "top_p": 0.95,
+            "top_k": 40,
+            "max_output_tokens": 200,
+        }
     
     def generate_metadata(self, video_title: str, video_description: str) -> Dict:
-        """Generate enhanced metadata for the video"""
+        """Generate enhanced metadata for the video using Gemini"""
         try:
             # Generate a viral-style title
             title_prompt = f"""Create a viral, engaging title for this YouTube Short. Make it clickable and exciting. The original title was: "{video_title}"
@@ -24,16 +34,8 @@ Rules:
 
 Return ONLY the title, nothing else."""
             
-            title_response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a viral video title expert for YouTube Shorts."},
-                    {"role": "user", "content": title_prompt}
-                ],
-                max_tokens=100,
-                temperature=0.8
-            )
-            enhanced_title = title_response.choices[0].message.content.strip()
+            title_response = self.model.generate_content(title_prompt)
+            enhanced_title = title_response.text.strip()
             
             # Generate a description with hashtags
             desc_prompt = f"""Create an engaging description for this YouTube Short with optimized hashtags.
@@ -50,16 +52,8 @@ Rules:
 
 Return ONLY the description, nothing else."""
             
-            desc_response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a YouTube Shorts description expert."},
-                    {"role": "user", "content": desc_prompt}
-                ],
-                max_tokens=200,
-                temperature=0.7
-            )
-            enhanced_description = desc_response.choices[0].message.content.strip()
+            desc_response = self.model.generate_content(desc_prompt)
+            enhanced_description = desc_response.text.strip()
             
             # Generate tags
             tags_prompt = f"""Generate 10-15 highly relevant and searchable tags for this YouTube Short.
@@ -76,36 +70,34 @@ Rules:
 
 Return ONLY the tags as a comma-separated list, nothing else."""
             
-            tags_response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a YouTube SEO expert."},
-                    {"role": "user", "content": tags_prompt}
-                ],
-                max_tokens=150,
-                temperature=0.6
-            )
-            tags = [tag.strip() for tag in tags_response.choices[0].message.content.split(',')]
+            tags_response = self.model.generate_content(tags_prompt)
+            tags = [tag.strip() for tag in tags_response.text.split(',') if tag.strip()]
+            
+            # Ensure we have at least some tags
+            if not tags:
+                tags = ['shorts', 'youtube', 'viral', 'trending']
             
             return {
-                'enhanced_title': enhanced_title,
-                'enhanced_description': enhanced_description,
-                'tags': tags,
-                'generated_at': datetime.now().isoformat()
+                'enhanced_title': enhanced_title[:100],  # YouTube limit
+                'enhanced_description': enhanced_description[:5000],  # YouTube limit
+                'tags': tags[:500],  # YouTube limits to 500 tags
+                'generated_at': datetime.now().isoformat(),
+                'model_used': 'gemini-pro'
             }
             
         except Exception as e:
-            log.error(f"Error generating metadata: {e}")
+            log.error(f"Error generating metadata with Gemini: {e}")
             # Fallback to original content
             return {
-                'enhanced_title': video_title,
-                'enhanced_description': video_description,
-                'tags': ['shorts', 'youtube', 'viral'],
-                'generated_at': datetime.now().isoformat()
+                'enhanced_title': video_title[:100],
+                'enhanced_description': video_description[:5000],
+                'tags': ['shorts', 'youtube', 'viral', 'trending'],
+                'generated_at': datetime.now().isoformat(),
+                'model_used': 'fallback'
             }
     
     def generate_thumbnail_ideas(self, video_title: str) -> List[str]:
-        """Generate thumbnail ideas for the video"""
+        """Generate thumbnail ideas for the video using Gemini"""
         try:
             prompt = f"""Generate 3 specific thumbnail ideas for this YouTube Short. Be very specific about what elements to include.
 
@@ -119,19 +111,42 @@ Rules:
 
 Return each idea on a new line prefixed with a number."""
             
-            response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a YouTube thumbnail design expert."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=200,
-                temperature=0.8
-            )
+            response = self.model.generate_content(prompt)
+            ideas = [idea.strip() for idea in response.text.split('\n') if idea.strip() and any(c.isdigit() for c in idea[:2])]
             
-            ideas = [idea.strip() for idea in response.choices[0].message.content.split('\n') if idea.strip()]
-            return ideas
+            if not ideas:
+                ideas = ["Surprised face reaction thumbnail with bold text overlay"]
+            
+            return ideas[:3]  # Limit to 3 ideas
             
         except Exception as e:
             log.error(f"Error generating thumbnail ideas: {e}")
             return ["Surprised face reaction thumbnail with text overlay"]
+    
+    def generate_hashtags(self, video_title: str, video_description: str) -> List[str]:
+        """Generate optimized hashtags using Gemini"""
+        try:
+            prompt = f"""Generate 10 highly relevant and trending hashtags for this YouTube Short.
+
+Video title: {video_title}
+Video description: {video_description}
+
+Rules:
+- Start with the most relevant hashtags
+- Include a mix of broad and specific tags
+- Include trending hashtags when relevant
+- Keep each hashtag under 30 characters
+- No spaces in hashtags
+- Include the channel name or personality if relevant
+
+Return ONLY the hashtags as a space-separated list, nothing else."""
+            
+            response = self.model.generate_content(prompt)
+            hashtags = response.text.strip().split()
+            # Clean up hashtags
+            hashtags = [tag if tag.startswith('#') else f'#{tag}' for tag in hashtags]
+            return hashtags[:10]  # Limit to 10 hashtags
+            
+        except Exception as e:
+            log.error(f"Error generating hashtags: {e}")
+            return ['#shorts', '#youtube', '#viral', '#trending', '#video']
