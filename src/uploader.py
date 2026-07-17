@@ -19,6 +19,11 @@ class VideoUploader:
             video_id = video_info['id']
             log.info(f"Processing video: {video_info['title']} ({video_id})")
             
+            # Double-check if video was already processed (in case of race condition)
+            if self.db.is_video_processed(video_id):
+                log.warning(f"Video {video_id} was processed during this run, skipping")
+                return False
+            
             # Generate enhanced metadata
             log.info("Generating enhanced metadata...")
             metadata = self.metadata_generator.generate_metadata(
@@ -26,16 +31,28 @@ class VideoUploader:
                 video_info['description']
             )
             
-            # Download the video
+            # Download the video - allow webm extension
             video_filename = f"{video_id}.mp4"
             video_path = Path('downloads') / video_filename
             log.info(f"Downloading video to {video_path}")
             
             if not self.youtube.download_video(video_id, str(video_path)):
                 log.error("Failed to download video")
+                self.db.mark_video_failed(video_id, "Download failed")
                 return False
             
-            # Generate thumbnail (simple version)
+            # Check if the file exists, if not try with .webm extension
+            if not video_path.exists():
+                webm_path = Path('downloads') / f"{video_id}.webm"
+                if webm_path.exists():
+                    video_path = webm_path
+                    log.info(f"Using webm file: {video_path}")
+                else:
+                    log.error(f"Downloaded file not found: {video_path}")
+                    self.db.mark_video_failed(video_id, "Downloaded file not found")
+                    return False
+            
+            # Generate thumbnail
             thumbnail_path = self._generate_thumbnail(video_path)
             
             # Upload the video
@@ -49,29 +66,31 @@ class VideoUploader:
             )
             
             if uploaded_video_id:
-                # Mark as processed
+                # Mark as processed and uploaded
                 self.db.mark_video_processed(video_id, metadata)
-                log.info(f"Successfully processed and uploaded video: {uploaded_video_id}")
+                log.info(f"✅ Successfully processed and uploaded video: {uploaded_video_id}")
                 
                 # Clean up
                 self._cleanup_files(video_path, thumbnail_path)
                 return True
             else:
                 log.error("Failed to upload video")
+                self.db.mark_video_failed(video_id, "Upload failed")
                 return False
                 
         except Exception as e:
             log.error(f"Error processing video: {e}")
+            self.db.mark_video_failed(video_info['id'], str(e))
             return False
     
     def _generate_thumbnail(self, video_path: Path) -> Optional[str]:
         """Generate a simple thumbnail from the video"""
         try:
             thumbnail_path = Path('outputs') / f"{video_path.stem}_thumbnail.png"
+            thumbnail_path.parent.mkdir(exist_ok=True)
             
             # Use ffmpeg to extract a frame from the middle of the video
             import cv2
-            import numpy as np
             
             cap = cv2.VideoCapture(str(video_path))
             if not cap.isOpened():
