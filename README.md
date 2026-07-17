@@ -22,5 +22,5 @@ An automated system that monitors YouTube channels, processes new shorts, enhanc
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/youtube-automation.git
-cd youtube-automation
+git clone https://github.com/pmcintyr/youtuberauto.git
+cd youtuberauto
