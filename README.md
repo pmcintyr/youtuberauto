@@ -22,4 +22,4 @@ An automated system that monitors YouTube channels, processes new shorts, enhanc
 1. Clone the repository:
 ```bash
 git clone https://github.com/pmcintyr/youtuberauto.git
-cd youtube-automation
+cd youtuberauto
