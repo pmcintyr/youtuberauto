@@ -128,11 +128,15 @@ class YouTubeClient:
         """Download a video using yt-dlp"""
         try:
             import yt_dlp
+            import os
             
-            # Try different format options
+            # Ensure the downloads directory exists
+            os.makedirs('downloads', exist_ok=True)
+            
+            # Use the exact output path
             ydl_opts = {
-                'outtmpl': output_path,
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # More flexible format
+                'outtmpl': output_path,  # Use the exact path provided
+                'format': 'best[ext=mp4]/best',  # Simplified format
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
@@ -142,20 +146,24 @@ class YouTubeClient:
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Try to download
-                try:
-                    ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
+                ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
+                
+                # Check if file exists
+                if os.path.exists(output_path):
                     log.info(f"Downloaded video {video_id} to {output_path}")
                     return True
-                except Exception as e:
-                    log.warning(f"First download attempt failed: {e}")
-                    
-                    # Try alternative format
-                    ydl_opts['format'] = 'best'
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
-                        ydl2.download([f'https://www.youtube.com/watch?v={video_id}'])
-                        log.info(f"Downloaded video {video_id} with alternative format")
+                else:
+                    # Try to find the file with a different extension
+                    import glob
+                    files = glob.glob(f"downloads/{video_id}.*")
+                    if files:
+                        # Rename to the expected path
+                        os.rename(files[0], output_path)
+                        log.info(f"Renamed {files[0]} to {output_path}")
                         return True
+                    else:
+                        log.error(f"Could not find downloaded file for {video_id}")
+                        return False
             
         except Exception as e:
             log.error(f"Error downloading video: {e}")
