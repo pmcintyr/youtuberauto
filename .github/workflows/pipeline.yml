@@ -2,7 +2,8 @@ name: YouTube Automation Pipeline
 
 on:
   schedule:
-    - cron: '0 9 * * *'
+    # Run less frequently - every 12 hours instead of daily
+    - cron: '0 */12 * * *'
   workflow_dispatch:
 
 jobs:
@@ -31,7 +32,7 @@ jobs:
       
       - name: Create necessary directories
         run: |
-          mkdir -p downloads outputs data logs
+          mkdir -p downloads outputs data logs data/metadata_cache
       
       - name: Decode and save cookies
         env:
@@ -39,10 +40,13 @@ jobs:
         run: |
           if [ -n "$COOKIES_BASE64" ]; then
             echo "$COOKIES_BASE64" | base64 -d > cookies.txt
-            echo "✅ Cookies saved successfully"
-            echo "Cookies file size: $(wc -l < cookies.txt) lines"
-          else
-            echo "⚠️ No cookies found - downloads may fail"
+            echo "✅ Cookies saved"
+            # Verify cookies format
+            if grep -q "youtube.com" cookies.txt; then
+              echo "✅ Cookies contain youtube.com entries"
+            else
+              echo "⚠️ Cookies may be in wrong format"
+            fi
           fi
       
       - name: Run main pipeline
@@ -53,14 +57,14 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
           TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-1.5-flash' }}
+          GEMINI_MODEL: gemini-1.5-flash
           YOUTUBE_COOKIES_FILE: cookies.txt
         run: |
-          # Debug: Check if cookies file exists and has content
+          # Debug: Show cookie file info
           if [ -f cookies.txt ]; then
-            echo "✅ Cookies file found ($(wc -l < cookies.txt) lines)"
-          else
-            echo "⚠️ Cookies file not found"
+            echo "Cookies file info:"
+            wc -l cookies.txt
+            head -n 3 cookies.txt
           fi
           python src/main.py
       
@@ -70,13 +74,12 @@ jobs:
         with:
           name: pipeline-results-${{ github.run_id }}
           path: |
-            data/processed.json
+            data/
             logs/
             outputs/
           retention-days: 14
-          if-no-files-found: warn
       
-      - name: Clean up (remove cookies for security)
+      - name: Clean up
         if: always()
         run: |
           rm -rf downloads/*
