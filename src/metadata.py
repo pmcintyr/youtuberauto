@@ -1,5 +1,4 @@
 import google.genai as genai
-from google.genai import types
 from typing import Dict, List
 from datetime import datetime
 from src.logger import log
@@ -9,8 +8,7 @@ class MetadataGenerator:
     def __init__(self):
         # Initialize the new Gemini client
         self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
-        self.model = "gemini-1.5-flash"  # Use this stable, free model
-        # Alternative: "gemini-1.5-pro" (also free but with limits)
+        self.model = "gemini-1.5-flash"  # Stable, free model
     
     def generate_metadata(self, video_title: str, video_description: str) -> Dict:
         """Generate enhanced metadata for the video using Gemini"""
@@ -33,6 +31,8 @@ Return ONLY the title, nothing else."""
                 contents=title_prompt
             )
             enhanced_title = title_response.text.strip()
+            if not enhanced_title:
+                enhanced_title = video_title[:100]
             
             # Generate a description with hashtags
             desc_prompt = f"""Create an engaging description for this YouTube Short with optimized hashtags.
@@ -54,6 +54,8 @@ Return ONLY the description, nothing else."""
                 contents=desc_prompt
             )
             enhanced_description = desc_response.text.strip()
+            if not enhanced_description:
+                enhanced_description = video_description[:5000]
             
             # Generate tags
             tags_prompt = f"""Generate 10-15 highly relevant and searchable tags for this YouTube Short.
@@ -85,7 +87,7 @@ Return ONLY the tags as a comma-separated list, nothing else."""
                 'enhanced_description': enhanced_description[:5000],
                 'tags': tags[:500],
                 'generated_at': datetime.now().isoformat(),
-                'model_used': 'gemini-2.0-flash-exp'
+                'model_used': self.model
             }
             
         except Exception as e:
@@ -93,38 +95,8 @@ Return ONLY the tags as a comma-separated list, nothing else."""
             # Fallback to original content
             return {
                 'enhanced_title': video_title[:100],
-                'enhanced_description': video_description[:5000],
+                'enhanced_description': video_description[:5000] if video_description else "Check out this awesome short! 🔥",
                 'tags': ['shorts', 'youtube', 'viral', 'trending'],
                 'generated_at': datetime.now().isoformat(),
                 'model_used': 'fallback'
             }
-    
-    def generate_thumbnail_ideas(self, video_title: str) -> List[str]:
-        """Generate thumbnail ideas for the video using Gemini"""
-        try:
-            prompt = f"""Generate 3 specific thumbnail ideas for this YouTube Short. Be very specific about what elements to include.
-
-Video title: {video_title}
-
-Rules:
-- Keep each idea under 50 words
-- Be specific about expressions, text overlays, and colors
-- Focus on YouTube Shorts thumbnail best practices
-- Mention specific elements that should be visible
-
-Return each idea on a new line prefixed with a number."""
-            
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt
-            )
-            ideas = [idea.strip() for idea in response.text.split('\n') if idea.strip() and any(c.isdigit() for c in idea[:2])]
-            
-            if not ideas:
-                ideas = ["Surprised face reaction thumbnail with bold text overlay"]
-            
-            return ideas[:3]
-            
-        except Exception as e:
-            log.error(f"Error generating thumbnail ideas: {e}")
-            return ["Surprised face reaction thumbnail with text overlay"]
