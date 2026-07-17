@@ -2,23 +2,12 @@ name: YouTube Automation Pipeline
 
 on:
   schedule:
-    # Run daily at 9:00 AM UTC
     - cron: '0 9 * * *'
   workflow_dispatch:
-    inputs:
-      debug:
-        description: 'Debug mode'
-        type: boolean
-        default: false
-      video_id:
-        description: 'Specific video ID to process (optional)'
-        type: string
-        required: false
 
 jobs:
   process-and-upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Prevents hanging
     
     steps:
       - name: Checkout code
@@ -27,15 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'  # Stable version
-      
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          python-version: '3.11'
       
       - name: Install system dependencies
         run: |
@@ -52,6 +33,18 @@ jobs:
         run: |
           mkdir -p downloads outputs data logs
       
+      - name: Decode and save cookies
+        env:
+          COOKIES_BASE64: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          if [ -n "$COOKIES_BASE64" ]; then
+            echo "$COOKIES_BASE64" | base64 -d > cookies.txt
+            echo "✅ Cookies saved successfully"
+            echo "Cookies file size: $(wc -l < cookies.txt) lines"
+          else
+            echo "⚠️ No cookies found - downloads may fail"
+          fi
+      
       - name: Run main pipeline
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
@@ -61,13 +54,18 @@ jobs:
           TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-1.5-flash' }}
-          UPLOAD_PRIVACY: ${{ secrets.UPLOAD_PRIVACY || 'public' }}
-          VIDEO_DURATION_LIMIT: ${{ secrets.VIDEO_DURATION_LIMIT || '60' }}
+          YOUTUBE_COOKIES_FILE: cookies.txt
         run: |
+          # Debug: Check if cookies file exists and has content
+          if [ -f cookies.txt ]; then
+            echo "✅ Cookies file found ($(wc -l < cookies.txt) lines)"
+          else
+            echo "⚠️ Cookies file not found"
+          fi
           python src/main.py
       
       - name: Upload processed data as artifact
-        if: always()  # Upload even if pipeline fails
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pipeline-results-${{ github.run_id }}
@@ -77,16 +75,10 @@ jobs:
             outputs/
           retention-days: 14
           if-no-files-found: warn
-          compression-level: 6  # Optional: balance between speed and size
       
-      - name: Clean up downloads
-        if: always()  # Clean up even if pipeline fails
+      - name: Clean up (remove cookies for security)
+        if: always()
         run: |
           rm -rf downloads/*
           rm -rf outputs/*
-      
-      - name: Send notification on failure
-        if: failure()
-        run: |
-          echo "❌ Pipeline failed! Check the logs for details."
-          echo "Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          rm -f cookies.txt
