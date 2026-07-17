@@ -27,40 +27,53 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
       
-      - name: Install dependencies
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install --upgrade yt-dlp
       
       - name: Create necessary directories
         run: |
-          mkdir -p downloads
-          mkdir -p outputs
-          mkdir -p data
+          mkdir -p downloads outputs data logs
       
       - name: Run main pipeline
         env:
+          # All environment variables from your .env file
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
           TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  # Changed from OPENAI_API_KEY
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-pro' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-1.5-flash' }}
+          UPLOAD_PRIVACY: ${{ secrets.UPLOAD_PRIVACY || 'public' }}
+          VIDEO_DURATION_LIMIT: ${{ secrets.VIDEO_DURATION_LIMIT || '60' }}
         run: |
           python src/main.py
       
-      - name: Upload processed data
-        uses: actions/upload-artifact@v3
+      - name: Upload processed data as artifact
         if: always()
+        uses: actions/upload-artifact@v3
         with:
-          name: processed-data
+          name: pipeline-results
           path: |
             data/processed.json
-            outputs/
             logs/
+            outputs/
       
       - name: Clean up downloads
         run: |
           rm -rf downloads/*
           rm -rf outputs/*
+      
+      - name: Send notification on failure
+        if: failure()
+        run: |
+          echo "❌ Pipeline failed! Check the logs for details."
+          echo "Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
